@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="default"><meta name="apple-mobile-web-app-title" content="Scorecard"><meta name="theme-color" content="#EEF2F4"><link rel="apple-touch-icon" href="icon.png">
+<title>Scorecard</title>
+<style>
+*{box-sizing:border-box}
+body{font-family:"Avenir Next","Segoe UI",system-ui,sans-serif;color:#1D2B33;background:#EEF2F4;margin:0;padding:calc(18px + env(safe-area-inset-top)) 16px 40px}
+.wrap{max-width:520px;margin:0 auto}
+h1{font-size:26px;font-weight:600;letter-spacing:-.02em;margin:0 0 2px}
+.sub{color:#5B6B74;font-size:14px;margin:0 0 16px}
+.tabs{display:flex;gap:6px;margin-bottom:18px}
+.tabs button{flex:1;padding:9px 0;border:0;border-radius:6px;background:#DDE4E8;color:#3A4A53;font-size:14px;font-weight:500;font-family:inherit}
+.tabs button.on{background:#1D2B33;color:#fff}
+.card{background:#fff;border-radius:10px;padding:16px;margin-bottom:14px}
+h2{font-size:16px;font-weight:600;margin:0 0 12px}
+.row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-top:1px solid #EEF2F4}
+.row:first-of-type{border-top:0}
+label{font-size:15px;flex:1}
+.hint{color:#7A8890;font-size:12px;display:block}
+input,textarea,select{font:inherit;font-size:16px;padding:8px 10px;border:1px solid #CBD5DB;border-radius:6px;width:96px;text-align:right;background:#FBFCFC}
+input:focus,textarea:focus,select:focus{outline:2px solid #1F6F5B;outline-offset:1px}
+textarea{width:100%;text-align:left;min-height:80px;resize:vertical}
+select{width:130px;text-align:left}
+.strip{display:flex;justify-content:space-between;margin:6px 0 4px}
+.day{text-align:center;flex:1}
+.day .d{font-size:11px;color:#7A8890;margin-bottom:6px}
+.dots{display:flex;flex-direction:column;gap:3px;align-items:center}
+.dot{width:14px;height:14px;border-radius:50%;background:#DDE4E8}
+.dot.sq{border-radius:3px}
+.dot.hit{background:#1F6F5B}.dot.miss{background:#E3B8A0}
+.dot.today{box-shadow:0 0 0 2px #1D2B33 inset}
+.legend{font-size:12px;color:#7A8890;margin-top:10px}
+.stat{display:flex;justify-content:space-between;padding:8px 0;border-top:1px solid #EEF2F4;font-size:15px}
+.stat b{font-weight:600}.ok{color:#1F6F5B}.low{color:#B5602E}
+.lift{display:grid;grid-template-columns:1fr 70px 60px;gap:8px;align-items:center;padding:6px 0;font-size:15px}
+.lift input{width:100%}
+.btn{border:0;border-radius:6px;padding:10px 14px;font:inherit;font-size:14px;font-weight:500;background:#DDE4E8;color:#3A4A53}
+.nav{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+.nav button{background:none;border:1px solid #CBD5DB;border-radius:6px;padding:6px 12px;font-size:14px;font-family:inherit}
+.saved{font-size:12px;color:#7A8890;text-align:right;min-height:14px}
+.ctitle{font-size:13px;color:#5B6B74;margin:12px 0 2px}
+svg.chart{width:100%;height:140px;display:block}
+.hidden{display:none}
+</style></head><body><div class="wrap">
+<h1>Scorecard</h1>
+<p class="sub">The few numbers that move the goals. Everything else is noise.</p><div style="font-size:12px;color:#7A8890;margin:-10px 0 12px;display:flex;align-items:center"><span id="status"></span></div>
+<div class="tabs" id="tabs"></div>
+<div id="view"><p class="sub">Loading…</p></div>
+</div>
+<script>
+const KEY="scorecard:data";
+const DEFAULT={targets:{protein:120,fiber:30,veg:5,tir:70},lifts:["Squat","Bench","Deadlift","Row"],cardioName:"Benchmark run (min)",days:{},reviews:{}};
+let data=null,tab="today",date=todayKey(),saved="";
+function todayKey(){const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")}
+function addDays(k,n){const d=new Date(k+"T12:00:00");d.setDate(d.getDate()+n);return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")}
+function weekStart(k){const d=new Date(k+"T12:00:00");return addDays(k,-((d.getDay()+6)%7))}
+function fmt(k){return new Date(k+"T12:00:00").toLocaleDateString(undefined,{weekday:"short",month:"short",day:"numeric"})}
+const avg=a=>a.length?a.reduce((s,x)=>s+x,0)/a.length:null;
+const num=v=>(v===""||v==null||isNaN(+v))?null:+v;
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const r1=v=>v==null?"—":Math.round(v*10)/10;
+
+
+// ---- storage adapter with fallbacks ----
+let store={mode:"none"};
+async function pickStore(){
+  const probe=JSON.stringify({probe:Date.now()});
+  try{const r=await window.storage.set(KEY+":probe",probe);if(!r)throw 0;const b=await window.storage.get(KEY+":probe");if(!b||b.value!==probe)throw 0;
+    store={mode:"cloud",get:async()=>(await window.storage.get(KEY)).value,set:async v=>{const r=await window.storage.set(KEY,v);if(!r)throw new Error("no result")}};return}catch(e){}
+  try{localStorage.setItem(KEY+":probe",probe);if(localStorage.getItem(KEY+":probe")!==probe)throw 0;
+    store={mode:"device",get:async()=>{const v=localStorage.getItem(KEY);if(v==null)throw new Error("nokey");return v},set:async v=>localStorage.setItem(KEY,v)};return}catch(e){}
+  let mem=null;store={mode:"memory",get:async()=>{if(mem==null)throw new Error("nokey");return mem},set:async v=>{mem=v}};
+}
+async function load(){await pickStore();try{const p=JSON.parse(await store.get());data={...DEFAULT,...p,targets:{...DEFAULT.targets,...(p.targets||{})}}}catch(e){data=JSON.parse(JSON.stringify(DEFAULT));}render();setTimeout(()=>status(store.mode==="cloud"?"Ready — saves to your Claude account":store.mode==="device"?"Ready — saving on this phone; copy a Backup from the Targets tab now and then":"Storage unavailable here — entries won't persist. Use Backup on the Targets tab before closing.",store.mode==="memory"),50)}
+let saveTimer,dirty=false,saving=false;
+function status(msg,bad){saved=msg;document.querySelectorAll(".saved").forEach(el=>{el.textContent=msg;el.style.color=bad?"#B5602E":"#7A8890"});const b=document.getElementById("status");if(b){b.textContent=msg;b.style.color=bad?"#B5602E":"#7A8890"}}
+function queueSave(){dirty=true;status("Unsaved changes…");clearTimeout(saveTimer);saveTimer=setTimeout(flush,300)}
+async function flush(){if(!dirty||saving)return;saving=true;const payload=JSON.stringify(data);let ok=false,err="";
+  for(let i=0;i<3&&!ok;i++){try{await store.set(payload);if((await store.get())!==payload)throw new Error("verify failed");ok=true}catch(e){err=e&&e.message||String(e);await new Promise(r=>setTimeout(r,500*(i+1)))}}
+  saving=false;if(ok){dirty=false;status((store.mode==="cloud"?"Saved ":store.mode==="device"?"Saved on this device ":"Held in memory only ")+new Date().toLocaleTimeString([],{hour:"numeric",minute:"2-digit",second:"2-digit"}),store.mode==="memory")}else{status("Couldn't save ("+err+") — tap Retry",true);if(!document.getElementById("retry")){const b=document.getElementById("status");if(b){const r=document.createElement("button");r.id="retry";r.className="btn";r.style.marginLeft="8px";r.textContent="Retry";r.onclick=()=>{dirty=true;flush()};b.after(r)}}}
+  if(ok){const r=document.getElementById("retry");if(r)r.remove()}
+  if(dirty&&!saving&&JSON.stringify(data)!==payload)queueSave()}
+document.addEventListener("visibilitychange",()=>{if(document.hidden){clearTimeout(saveTimer);flush()}});
+window.addEventListener("pagehide",()=>{clearTimeout(saveTimer);flush()});
+window.addEventListener("blur",()=>{clearTimeout(saveTimer);flush()});
+function persist(){render();queueSave()}
+function persistQuiet(){queueSave()}
+function day(){return data.days[date]||(data.days[date]={})}
+function setDay(k,v){day()[k]=v;persist()}
+function setDayQuiet(k,v){day()[k]=v;queueSave()}
+async function persistQuiet(){try{await window.storage.set(KEY,JSON.stringify(data));saved="Saved "+new Date().toLocaleTimeString([],{hour:"numeric",minute:"2-digit"})}catch(e){saved="Couldn't save — check connection"}document.querySelectorAll(".saved").forEach(el=>el.textContent=saved)}
+
+function line(pts,ref){ // pts: [{x,y}] y may be null
+  const vals=pts.map(p=>p.y).filter(v=>v!=null);if(!vals.length)return '<p class="hint">No data yet.</p>';
+  let lo=Math.min(...vals,ref??Infinity),hi=Math.max(...vals,ref??-Infinity);if(hi===lo){hi+=1;lo-=1}const pad=(hi-lo)*0.15;lo-=pad;hi+=pad;
+  const W=480,H=140,L=36,R=8,T=8,B=22;const sx=i=>L+i*(W-L-R)/Math.max(1,pts.length-1);const sy=v=>T+(hi-v)*(H-T-B)/(hi-lo);
+  let d="",dots="",labels="";pts.forEach((p,i)=>{if(p.y==null)return;d+=(d?" L":"M")+sx(i)+" "+sy(p.y);dots+=`<circle cx="${sx(i)}" cy="${sy(p.y)}" r="3" fill="#1F6F5B"/>`});
+  pts.forEach((p,i)=>{if(pts.length<=6||i%Math.ceil(pts.length/6)===0)labels+=`<text x="${sx(i)}" y="${H-6}" font-size="10" text-anchor="middle" fill="#7A8890">${esc(p.x)}</text>`});
+  const refl=ref!=null?`<line x1="${L}" x2="${W-R}" y1="${sy(ref)}" y2="${sy(ref)}" stroke="#B5602E" stroke-dasharray="4 3"/>`:"";
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}"><text x="2" y="${T+8}" font-size="10" fill="#7A8890">${r1(hi-pad)}</text><text x="2" y="${H-B}" font-size="10" fill="#7A8890">${r1(lo+pad)}</text>${refl}<path d="${d}" fill="none" stroke="#1F6F5B" stroke-width="2"/>${dots}${labels}</svg>`}
+
+
+// ---- Clarity CSV import ----
+function parseClarity(text){
+  const lines=text.split(/\r?\n/).filter(l=>l.trim());if(lines.length<2)throw new Error("File looks empty");
+  const split=l=>{const out=[];let cur="",q=false;for(const ch of l){if(ch==='"')q=!q;else if(ch===','&&!q){out.push(cur);cur=""}else cur+=ch}out.push(cur);return out.map(x=>x.trim())};
+  const head=split(lines[0]).map(h=>h.toLowerCase());
+  const iT=head.findIndex(h=>h.includes("timestamp")),iG=head.findIndex(h=>h.includes("glucose value")),iE=head.findIndex(h=>h==="event type");
+  if(iT<0||iG<0)throw new Error("Couldn't find Timestamp / Glucose Value columns — is this a Clarity export?");
+  const byDay={};let n=0;
+  for(let i=1;i<lines.length;i++){const c=split(lines[i]);if(iE>=0&&c[iE]&&c[iE]!=="EGV")continue;const t=c[iT];if(!t||t.length<16)continue;
+    let g=c[iG];if(g==="Low")g=39;else if(g==="High")g=401;g=+g;if(!(g>0))continue;
+    const k=t.slice(0,10),h=+t.slice(11,13);(byDay[k]=byDay[k]||[]).push({g,h});n++}
+  const out={};for(const k in byDay){const v=byDay[k].map(r=>r.g);if(v.length<36)continue; // skip days with <3h of data
+    const m=avg(v),sd=Math.sqrt(avg(v.map(x=>(x-m)**2)));const pm=byDay[k].filter(r=>r.h>=15&&r.h<22).map(r=>r.g),rest=byDay[k].filter(r=>r.h<15||r.h>=22).map(r=>r.g);
+    out[k]={avg:Math.round(m),tir:Math.round(100*v.filter(x=>x>=70&&x<=180).length/v.length),tbr:Math.round(10*100*v.filter(x=>x<70).length/v.length)/10,tar:Math.round(100*v.filter(x=>x>180).length/v.length),cv:Math.round(100*sd/m),pm:pm.length?Math.round(avg(pm)):null,rest:rest.length?Math.round(avg(rest)):null,n:v.length}}
+  return {days:out,readings:n}}
+function importClarity(text){try{const r=parseClarity(text);const ks=Object.keys(r.days);if(!ks.length)throw new Error("No full days of readings found");
+  ks.forEach(k=>{const d=data.days[k]||(data.days[k]={});d.cgm=r.days[k];if(num(d.tir)==null)d.tir=String(r.days[k].tir)});
+  data.lastImport={at:todayKey(),from:ks.sort()[0],to:ks.sort().slice(-1)[0],readings:r.readings};persist()}catch(e){alert(e.message)}}
+function importFile(f){if(!f)return;const rd=new FileReader();rd.onload=()=>importClarity(rd.result);rd.readAsText(f)}
+const gmi=a=>a==null?"—":(3.31+0.02392*a).toFixed(1);
+function render(){
+  document.getElementById("tabs").innerHTML=["today","week","glucose","trends","targets"].map(t=>`<button class="${t===tab?"on":""}" onclick="tab='${t}';render()">${t[0].toUpperCase()+t.slice(1)}</button>`).join("");
+  const T=data.targets,v=document.getElementById("view");
+  if(tab==="today"){const d=day();const lifts=d.lifts||(d.lifts=data.lifts.map(n=>({name:n,weight:"",reps:""})));
+    const inp=(k,im="decimal")=>`<input inputmode="${im}" value="${esc(d[k]??"")}" oninput="setDayQuiet('${k}',this.value)">`;
+    v.innerHTML=`<div class="nav"><button onclick="date=addDays(date,-1);render()">‹</button><strong>${date===todayKey()?"Today, ":""}${fmt(date)}</strong><button onclick="date=addDays(date,1);render()">›</button></div>
+    <div class="card"><h2>Food</h2>
+    <div class="row"><label>Protein<span class="hint">grams, from your app</span></label>${inp("protein")}</div>
+    <div class="row"><label>Fiber<span class="hint">grams</span></label>${inp("fiber")}</div>
+    <div class="row"><label>Vegetables<span class="hint">servings</span></label>${inp("veg")}</div></div>
+    <div class="card"><h2>Body &amp; glucose</h2>
+    <div class="row"><label>Weight<span class="hint">morning, same conditions</span></label>${inp("weight")}</div>
+    <div class="row"><label>Time in range<span class="hint">% — fills in from a Clarity import</span></label>${inp("tir")}</div></div>
+    <div class="card"><h2>Training</h2>
+    <div class="row"><label>Session</label><select onchange="setDay('workout',this.value)">${["","strength","cardio","both","rest"].map(o=>`<option value="${o}" ${d.workout===o?"selected":""}>${o?o[0].toUpperCase()+o.slice(1):"—"}</option>`).join("")}</select></div>
+    ${(d.workout==="strength"||d.workout==="both")?`<p class="hint" style="margin:8px 0 4px">Top working set per lift — weight × reps</p>`+lifts.map((l,i)=>`<div class="lift"><span>${esc(l.name)}</span><input inputmode="decimal" placeholder="lb" value="${esc(l.weight)}" oninput="day().lifts[${i}].weight=this.value;persistQuiet()"><input inputmode="numeric" placeholder="reps" value="${esc(l.reps)}" oninput="day().lifts[${i}].reps=this.value;persistQuiet()"></div>`).join(""):""}
+    ${(d.workout==="cardio"||d.workout==="both")?`<div class="row"><label>${esc(data.cardioName)}<span class="hint">only on benchmark days</span></label>${inp("cardio")}</div>`:""}
+    </div>
+    <div class="card"><h2>Note</h2><textarea placeholder="Anything worth remembering — a low that needed carbs, a meal that landed well, soreness…" oninput="setDayQuiet('note',this.value)">${esc(d.note||"")}</textarea><div class="saved">${saved}</div></div>`;
+  }
+  else if(tab==="week"){const ws=weekStart(date),keys=Array.from({length:7},(_,i)=>addDays(ws,i)),days=keys.map(k=>data.days[k]||{});
+    const col=k=>avg(days.map(d=>num(d[k])).filter(x=>x!=null));const wk={protein:col("protein"),fiber:col("fiber"),veg:col("veg"),tir:col("tir"),weight:col("weight"),sessions:days.filter(d=>d.workout&&d.workout!=="rest").length};
+    const hit=(d,k)=>{const x=num(d[k]);return x==null?null:x>=T[k]};const rk=ws;
+    v.innerHTML=`<div class="nav"><button onclick="date=addDays(date,-7);render()">‹ week</button><strong>Week of ${fmt(ws)}</strong><button onclick="date=addDays(date,7);render()">week ›</button></div>
+    <div class="card"><h2>Hits</h2><div class="strip">${keys.map((k,i)=>{const d=days[i];return `<div class="day"><div class="d">${"MTWTFSS"[i]}</div><div class="dots">${["protein","fiber","veg","tir"].map(m=>{const h=hit(d,m);return `<div class="dot ${h==null?"":h?"hit":"miss"} ${k===todayKey()?"today":""}"></div>`}).join("")}<div class="dot sq ${d.workout&&d.workout!=="rest"?"hit":""}"></div></div></div>`}).join("")}</div>
+    <div class="legend">Rows: protein · fiber · vegetables · time in range · trained. Green = target met.</div></div>
+    <div class="card"><h2>Averages so far</h2>${[["Protein",wk.protein,T.protein,"g"],["Fiber",wk.fiber,T.fiber,"g"],["Vegetables",wk.veg,T.veg,""],["Time in range",wk.tir,T.tir,"%"]].map(([n,x,t,u])=>`<div class="stat"><span>${n}</span><b class="${x==null?"":x>=t?"ok":"low"}">${x==null?"—":r1(x)+u}<span class="hint" style="display:inline;margin-left:6px">/ ${t}${u}</span></b></div>`).join("")}
+    <div class="stat"><span>Weight (avg)</span><b>${r1(wk.weight)}</b></div><div class="stat"><span>Sessions</span><b>${wk.sessions}</b></div></div>
+    <div class="card"><h2>Sunday review</h2><p class="hint" style="margin-bottom:8px">What moved, what didn't, one change for next week.</p><textarea oninput="data.reviews['${rk}']=this.value;queueSave()">${esc(data.reviews[rk]||"")}</textarea><div class="saved">${saved}</div></div>`;
+  }
+  else if(tab==="glucose"){const ks=Object.keys(data.days).filter(k=>data.days[k].cgm).sort().slice(-14).reverse();const li=data.lastImport;
+    const last7=Object.keys(data.days).filter(k=>data.days[k].cgm).sort().slice(-7).map(k=>data.days[k].cgm);const c=f=>avg(last7.map(f).filter(x=>x!=null));
+    v.innerHTML=`<div class="card"><h2>Import from Clarity</h2><p class="hint" style="margin-bottom:10px">In Clarity, open any Reports page → export icon → choose a date range → CSV. Then pick the file here, or paste its contents. Re-importing the same days just updates them.</p>
+    <input type="file" accept=".csv,text/csv" style="width:100%;text-align:left;padding:6px" onchange="importFile(this.files[0])">
+    <textarea style="margin-top:10px;min-height:60px" placeholder="…or paste the CSV text here" onchange="if(this.value.trim()){importClarity(this.value);this.value=''}"></textarea>
+    <div class="saved">${li?`Last import ${fmt(li.at)}: ${fmt(li.from)} – ${fmt(li.to)}, ${li.readings.toLocaleString()} readings`:""}</div></div>
+    ${last7.length?`<div class="card"><h2>Last ${last7.length} days</h2>
+    <div class="stat"><span>Average glucose</span><b>${r1(c(x=>x.avg))} mg/dL</b></div>
+    <div class="stat"><span>GMI (est. A1c)</span><b>${gmi(c(x=>x.avg))}%</b></div>
+    <div class="stat"><span>Time in range 70–180</span><b class="${c(x=>x.tir)>=T.tir?"ok":"low"}">${r1(c(x=>x.tir))}%</b></div>
+    <div class="stat"><span>Time below 70</span><b class="${c(x=>x.tbr)<4?"ok":"low"}">${r1(c(x=>x.tbr))}%</b></div>
+    <div class="stat"><span>Time above 180</span><b>${r1(c(x=>x.tar))}%</b></div>
+    <div class="stat"><span>Variability (CV)</span><b class="${c(x=>x.cv)<=36?"ok":"low"}">${r1(c(x=>x.cv))}%</b></div>
+    <div class="stat"><span>3–10pm average</span><b>${r1(c(x=>x.pm))} <span class="hint" style="display:inline">vs ${r1(c(x=>x.rest))} rest of day</span></b></div>
+    <p class="hint" style="margin-top:10px">Consensus targets: TIR &gt;70%, below-range &lt;4%, CV ≤36%. GMI is an estimate, not a lab A1c.</p></div>
+    <div class="card"><h2>By day</h2>${ks.map(k=>{const g=data.days[k].cgm;return `<div class="stat"><span>${fmt(k)}</span><b>${g.avg} · <span class="${g.tir>=T.tir?"ok":"low"}">${g.tir}%</span> · <span class="hint" style="display:inline">pm ${g.pm??"—"}</span></b></div>`}).join("")}<p class="hint" style="margin-top:8px">avg mg/dL · time in range · 3–10pm avg</p></div>`:`<div class="card"><p class="hint">No glucose data imported yet.</p></div>`}`;
+  }
+  else if(tab==="trends"){const weeks=[];for(let i=11;i>=0;i--){const s=addDays(weekStart(todayKey()),-7*i);const ks=Array.from({length:7},(_,j)=>data.days[addDays(s,j)]||{});const c=k=>avg(ks.map(d=>num(d[k])).filter(x=>x!=null));const cg=f=>avg(ks.map(d=>d.cgm?f(d.cgm):null).filter(x=>x!=null));weeks.push({x:s.slice(5),weight:c("weight"),protein:c("protein"),tir:c("tir"),glu:cg(x=>x.avg),pm:cg(x=>x.pm),cv:cg(x=>x.cv)})}
+    const by={};Object.keys(data.days).sort().forEach(k=>{(data.days[k].lifts||[]).forEach(l=>{const w=num(l.weight),r=num(l.reps);if(w==null||r==null)return;(by[l.name]=by[l.name]||[]).push({x:k.slice(5),y:Math.round(w*(1+r/30))})})});
+    const cardio=Object.keys(data.days).sort().filter(k=>num(data.days[k].cardio)!=null).map(k=>({x:k.slice(5),y:+data.days[k].cardio}));
+    v.innerHTML=`<div class="card"><h2>Twelve weeks</h2>
+    <p class="ctitle">Weight, weekly average</p>${line(weeks.map(w=>({x:w.x,y:w.weight})))}
+    <p class="ctitle">Protein, weekly average</p>${line(weeks.map(w=>({x:w.x,y:w.protein})),T.protein)}
+    <p class="ctitle">Time in range, weekly average</p>${line(weeks.map(w=>({x:w.x,y:w.tir})),T.tir)}</div>
+    <div class="card"><h2>Glucose (from Clarity)</h2>${weeks.some(w=>w.glu!=null)?`<p class="ctitle">Average glucose, mg/dL</p>${line(weeks.map(w=>({x:w.x,y:w.glu})))}<p class="ctitle">3–10pm average, mg/dL</p>${line(weeks.map(w=>({x:w.x,y:w.pm})))}<p class="ctitle">Variability (CV %), target ≤36</p>${line(weeks.map(w=>({x:w.x,y:w.cv})),36)}`:'<p class="hint">Import a Clarity CSV on the Glucose tab to see these.</p>'}</div>
+    <div class="card"><h2>Strength</h2><p class="hint">Estimated 1RM from your top set (Epley). Direction matters, not the number.</p>${Object.keys(by).length?Object.entries(by).map(([n,p])=>`<p class="ctitle">${esc(n)}</p>${line(p)}`).join(""):'<p class="hint" style="margin-top:10px">Log a strength session to see progress here.</p>'}</div>
+    <div class="card"><h2>Cardio benchmark</h2>${cardio.length?line(cardio):'<p class="hint">Log a benchmark result on a cardio day to start this line.</p>'}</div>`;
+  }
+  else{v.innerHTML=`<div class="card"><h2>Daily targets</h2>${[["Protein (g)","protein"],["Fiber (g)","fiber"],["Vegetable servings","veg"],["Time in range (%)","tir"]].map(([n,k])=>`<div class="row"><label>${n}</label><input inputmode="decimal" value="${T[k]}" oninput="data.targets.${k}=num(this.value)??0;queueSave()"></div>`).join("")}<p class="hint" style="margin-top:10px">Set protein with your care team; the defaults are placeholders.</p></div>
+    <div class="card"><h2>Lifts to track</h2><p class="hint" style="margin-bottom:8px">One line each. These become the rows on strength days.</p><textarea oninput="data.lifts=this.value.split('\\n').map(s=>s.trim()).filter(Boolean);queueSave()">${esc(data.lifts.join("\n"))}</textarea></div>
+    <div class="card"><h2>Cardio benchmark</h2><p class="hint" style="margin-bottom:8px">Name it so you know what you're measuring, e.g. "3 mi loop (min)" or "pace at 140 bpm".</p><input style="width:100%;text-align:left" value="${esc(data.cardioName)}" oninput="data.cardioName=this.value;queueSave()"></div>
+    <div class="card"><h2>Backup &amp; restore</h2><p class="hint" style="margin-bottom:8px">Copy this text somewhere safe (Notes works). To restore or move to another device, paste it back and tap Restore.</p>
+    <textarea id="bk" style="min-height:70px;font-size:11px">${esc(JSON.stringify(data))}</textarea>
+    <div style="display:flex;gap:8px;margin-top:8px"><button class="btn" onclick="navigator.clipboard&&navigator.clipboard.writeText(document.getElementById('bk').value).then(()=>status('Copied backup to clipboard')).catch(()=>{document.getElementById('bk').select();status('Select the text above and copy it')})">Copy backup</button>
+    <button class="btn" onclick="try{const p=JSON.parse(document.getElementById('bk').value);if(!p.days)throw 0;data={...DEFAULT,...p,targets:{...DEFAULT.targets,...(p.targets||{})}};persist();status('Restored')}catch(e){alert('That does not look like a scorecard backup')}">Restore</button></div></div>
+    <div class="card"><button class="btn" onclick="if(confirm('Delete all logged data? This can\\'t be undone.')){data=JSON.parse(JSON.stringify(DEFAULT));persist()}">Reset everything</button><div class="saved">${saved}</div></div>`;}
+}
+load();
+</script></body></html>
