@@ -48,7 +48,7 @@ svg.chart{width:100%;height:140px;display:block}
 </div>
 <script>
 const KEY="scorecard:data";
-const DEFAULT={targets:{protein:120,fiber:30,veg:5,tir:70},lifts:["Squat","Bench","Deadlift","Row"],cardioName:"Benchmark run (min)",days:{},reviews:{}};
+const DEFAULT={targets:{protein:120,fiber:30,veg:5,tir:70,tirHigh:160},lifts:["Squat","Bench","Deadlift","Row"],cardioName:"Benchmark run (min)",days:{},reviews:{}};
 let data=null,tab="today",date=todayKey(),saved="";
 function todayKey(){const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")}
 function addDays(k,n){const d=new Date(k+"T12:00:00");d.setDate(d.getDate()+n);return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")}
@@ -70,7 +70,7 @@ async function pickStore(){
     store={mode:"device",get:async()=>{const v=localStorage.getItem(KEY);if(v==null)throw new Error("nokey");return v},set:async v=>localStorage.setItem(KEY,v)};return}catch(e){}
   let mem=null;store={mode:"memory",get:async()=>{if(mem==null)throw new Error("nokey");return mem},set:async v=>{mem=v}};
 }
-async function load(){await pickStore();try{const p=JSON.parse(await store.get());data={...DEFAULT,...p,targets:{...DEFAULT.targets,...(p.targets||{})}}}catch(e){data=JSON.parse(JSON.stringify(DEFAULT));}render();setTimeout(()=>status(store.mode==="cloud"?"Ready — saves to your Claude account":store.mode==="device"?"Ready — saving on this phone; copy a Backup from the Targets tab now and then":"Storage unavailable here — entries won't persist. Use Backup on the Targets tab before closing.",store.mode==="memory"),50)}
+async function load(){await pickStore();try{const p=JSON.parse(await store.get());data={...DEFAULT,...p,targets:{...DEFAULT.targets,...(p.targets||{})}}}catch(e){data=JSON.parse(JSON.stringify(DEFAULT));}render();setTimeout(()=>status(store.mode==="cloud"?"Ready — saves to your Claude account":store.mode==="device"?"Ready — saving on this device only; use Backup on the Targets tab to copy your data":"Storage unavailable here — entries won't persist. Use Backup on the Targets tab before closing.",store.mode==="memory"),50)}
 let saveTimer,dirty=false,saving=false;
 function status(msg,bad){saved=msg;document.querySelectorAll(".saved").forEach(el=>{el.textContent=msg;el.style.color=bad?"#B5602E":"#7A8890"});const b=document.getElementById("status");if(b){b.textContent=msg;b.style.color=bad?"#B5602E":"#7A8890"}}
 function queueSave(){dirty=true;status("Unsaved changes…");clearTimeout(saveTimer);saveTimer=setTimeout(flush,300)}
@@ -110,9 +110,9 @@ function parseClarity(text){
   for(let i=1;i<lines.length;i++){const c=split(lines[i]);if(iE>=0&&c[iE]&&c[iE]!=="EGV")continue;const t=c[iT];if(!t||t.length<16)continue;
     let g=c[iG];if(g==="Low")g=39;else if(g==="High")g=401;g=+g;if(!(g>0))continue;
     const k=t.slice(0,10),h=+t.slice(11,13);(byDay[k]=byDay[k]||[]).push({g,h});n++}
-  const out={};for(const k in byDay){const v=byDay[k].map(r=>r.g);if(v.length<36)continue; // skip days with <3h of data
-    const m=avg(v),sd=Math.sqrt(avg(v.map(x=>(x-m)**2)));const pm=byDay[k].filter(r=>r.h>=15&&r.h<22).map(r=>r.g),rest=byDay[k].filter(r=>r.h<15||r.h>=22).map(r=>r.g);
-    out[k]={avg:Math.round(m),tir:Math.round(100*v.filter(x=>x>=70&&x<=180).length/v.length),tbr:Math.round(10*100*v.filter(x=>x<70).length/v.length)/10,tar:Math.round(100*v.filter(x=>x>180).length/v.length),cv:Math.round(100*sd/m),pm:pm.length?Math.round(avg(pm)):null,rest:rest.length?Math.round(avg(rest)):null,n:v.length}}
+  const hi=data.targets.tirHigh||160;const out={};for(const k in byDay){const v=byDay[k].map(r=>r.g);if(v.length<36)continue;
+    const m=avg(v),sd=Math.sqrt(avg(v.map(x=>(x-m)**2)));const mid=byDay[k].filter(r=>r.h>=12&&r.h<15).map(r=>r.g),pm=byDay[k].filter(r=>r.h>=15&&r.h<22).map(r=>r.g);
+    out[k]={avg:Math.round(m),tir:Math.round(100*v.filter(x=>x>=70&&x<=hi).length/v.length),tbr:Math.round(10*100*v.filter(x=>x<70).length/v.length)/10,tar:Math.round(100*v.filter(x=>x>hi).length/v.length),cv:Math.round(100*sd/m),mid:mid.length?Math.round(avg(mid)):null,pmlow:pm.length?Math.round(10*100*pm.filter(x=>x<70).length/pm.length)/10:null,n:v.length}}
   return {days:out,readings:n}}
 function importClarity(text){try{const r=parseClarity(text);const ks=Object.keys(r.days);if(!ks.length)throw new Error("No full days of readings found");
   ks.forEach(k=>{const d=data.days[k]||(data.days[k]={});d.cgm=r.days[k];if(num(d.tir)==null)d.tir=String(r.days[k].tir)});
@@ -158,26 +158,27 @@ function render(){
     ${last7.length?`<div class="card"><h2>Last ${last7.length} days</h2>
     <div class="stat"><span>Average glucose</span><b>${r1(c(x=>x.avg))} mg/dL</b></div>
     <div class="stat"><span>GMI (est. A1c)</span><b>${gmi(c(x=>x.avg))}%</b></div>
-    <div class="stat"><span>Time in range 70–180</span><b class="${c(x=>x.tir)>=T.tir?"ok":"low"}">${r1(c(x=>x.tir))}%</b></div>
+    <div class="stat"><span>Time in range 70–${T.tirHigh}</span><b class="${c(x=>x.tir)>=T.tir?"ok":"low"}">${r1(c(x=>x.tir))}%</b></div>
     <div class="stat"><span>Time below 70</span><b class="${c(x=>x.tbr)<4?"ok":"low"}">${r1(c(x=>x.tbr))}%</b></div>
     <div class="stat"><span>Time above 180</span><b>${r1(c(x=>x.tar))}%</b></div>
     <div class="stat"><span>Variability (CV)</span><b class="${c(x=>x.cv)<=36?"ok":"low"}">${r1(c(x=>x.cv))}%</b></div>
-    <div class="stat"><span>3–10pm average</span><b>${r1(c(x=>x.pm))} <span class="hint" style="display:inline">vs ${r1(c(x=>x.rest))} rest of day</span></b></div>
-    <p class="hint" style="margin-top:10px">Consensus targets: TIR &gt;70%, below-range &lt;4%, CV ≤36%. GMI is an estimate, not a lab A1c.</p></div>
-    <div class="card"><h2>By day</h2>${ks.map(k=>{const g=data.days[k].cgm;return `<div class="stat"><span>${fmt(k)}</span><b>${g.avg} · <span class="${g.tir>=T.tir?"ok":"low"}">${g.tir}%</span> · <span class="hint" style="display:inline">pm ${g.pm??"—"}</span></b></div>`}).join("")}<p class="hint" style="margin-top:8px">avg mg/dL · time in range · 3–10pm avg</p></div>`:`<div class="card"><p class="hint">No glucose data imported yet.</p></div>`}`;
+    <div class="stat"><span>Midday peak (12–3pm avg)</span><b>${r1(c(x=>x.mid))}</b></div>
+    <div class="stat"><span>Afternoon lows (3–10pm below 70)</span><b class="${c(x=>x.pmlow)<4?"ok":"low"}">${r1(c(x=>x.pmlow))}%</b></div>
+    <p class="hint" style="margin-top:10px">Consensus targets: TIR &gt;70%, below-range &lt;4%, CV ≤36%. Range upper bound is set on the Targets tab (yours: ${T.tirHigh}). GMI is an estimate, not a lab A1c.</p></div>
+    <div class="card"><h2>By day</h2>${ks.map(k=>{const g=data.days[k].cgm;return `<div class="stat"><span>${fmt(k)}</span><b>${g.avg} · <span class="${g.tir>=T.tir?"ok":"low"}">${g.tir}%</span> · <span class="hint" style="display:inline">pm low ${g.pmlow??"—"}%</span></b></div>`}).join("")}<p class="hint" style="margin-top:8px">avg mg/dL · time in range · 3–10pm % below 70</p></div>`:`<div class="card"><p class="hint">No glucose data imported yet.</p></div>`}`;
   }
-  else if(tab==="trends"){const weeks=[];for(let i=11;i>=0;i--){const s=addDays(weekStart(todayKey()),-7*i);const ks=Array.from({length:7},(_,j)=>data.days[addDays(s,j)]||{});const c=k=>avg(ks.map(d=>num(d[k])).filter(x=>x!=null));const cg=f=>avg(ks.map(d=>d.cgm?f(d.cgm):null).filter(x=>x!=null));weeks.push({x:s.slice(5),weight:c("weight"),protein:c("protein"),tir:c("tir"),glu:cg(x=>x.avg),pm:cg(x=>x.pm),cv:cg(x=>x.cv)})}
+  else if(tab==="trends"){const weeks=[];for(let i=11;i>=0;i--){const s=addDays(weekStart(todayKey()),-7*i);const ks=Array.from({length:7},(_,j)=>data.days[addDays(s,j)]||{});const c=k=>avg(ks.map(d=>num(d[k])).filter(x=>x!=null));const cg=f=>avg(ks.map(d=>d.cgm?f(d.cgm):null).filter(x=>x!=null));weeks.push({x:s.slice(5),weight:c("weight"),protein:c("protein"),tir:c("tir"),glu:cg(x=>x.avg),mid:cg(x=>x.mid),pmlow:cg(x=>x.pmlow),cv:cg(x=>x.cv)})}
     const by={};Object.keys(data.days).sort().forEach(k=>{(data.days[k].lifts||[]).forEach(l=>{const w=num(l.weight),r=num(l.reps);if(w==null||r==null)return;(by[l.name]=by[l.name]||[]).push({x:k.slice(5),y:Math.round(w*(1+r/30))})})});
     const cardio=Object.keys(data.days).sort().filter(k=>num(data.days[k].cardio)!=null).map(k=>({x:k.slice(5),y:+data.days[k].cardio}));
     v.innerHTML=`<div class="card"><h2>Twelve weeks</h2>
     <p class="ctitle">Weight, weekly average</p>${line(weeks.map(w=>({x:w.x,y:w.weight})))}
     <p class="ctitle">Protein, weekly average</p>${line(weeks.map(w=>({x:w.x,y:w.protein})),T.protein)}
     <p class="ctitle">Time in range, weekly average</p>${line(weeks.map(w=>({x:w.x,y:w.tir})),T.tir)}</div>
-    <div class="card"><h2>Glucose (from Clarity)</h2>${weeks.some(w=>w.glu!=null)?`<p class="ctitle">Average glucose, mg/dL</p>${line(weeks.map(w=>({x:w.x,y:w.glu})))}<p class="ctitle">3–10pm average, mg/dL</p>${line(weeks.map(w=>({x:w.x,y:w.pm})))}<p class="ctitle">Variability (CV %), target ≤36</p>${line(weeks.map(w=>({x:w.x,y:w.cv})),36)}`:'<p class="hint">Import a Clarity CSV on the Glucose tab to see these.</p>'}</div>
+    <div class="card"><h2>Glucose (from Clarity)</h2>${weeks.some(w=>w.glu!=null)?`<p class="ctitle">Average glucose, mg/dL</p>${line(weeks.map(w=>({x:w.x,y:w.glu})))}<p class="ctitle">Midday peak (12–3pm avg), mg/dL</p>${line(weeks.map(w=>({x:w.x,y:w.mid})))}<p class="ctitle">Afternoon lows (3–10pm % below 70), target &lt;4</p>${line(weeks.map(w=>({x:w.x,y:w.pmlow})),4)}<p class="ctitle">Variability (CV %), target ≤36</p>${line(weeks.map(w=>({x:w.x,y:w.cv})),36)}`:'<p class="hint">Import a Clarity CSV on the Glucose tab to see these.</p>'}</div>
     <div class="card"><h2>Strength</h2><p class="hint">Estimated 1RM from your top set (Epley). Direction matters, not the number.</p>${Object.keys(by).length?Object.entries(by).map(([n,p])=>`<p class="ctitle">${esc(n)}</p>${line(p)}`).join(""):'<p class="hint" style="margin-top:10px">Log a strength session to see progress here.</p>'}</div>
     <div class="card"><h2>Cardio benchmark</h2>${cardio.length?line(cardio):'<p class="hint">Log a benchmark result on a cardio day to start this line.</p>'}</div>`;
   }
-  else{v.innerHTML=`<div class="card"><h2>Daily targets</h2>${[["Protein (g)","protein"],["Fiber (g)","fiber"],["Vegetable servings","veg"],["Time in range (%)","tir"]].map(([n,k])=>`<div class="row"><label>${n}</label><input inputmode="decimal" value="${T[k]}" oninput="data.targets.${k}=num(this.value)??0;queueSave()"></div>`).join("")}<p class="hint" style="margin-top:10px">Set protein with your care team; the defaults are placeholders.</p></div>
+  else{v.innerHTML=`<div class="card"><h2>Daily targets</h2>${[["Protein (g)","protein"],["Fiber (g)","fiber"],["Vegetable servings","veg"],["Time in range (%)","tir"],["Range upper bound (mg/dL, match Clarity)","tirHigh"]].map(([n,k])=>`<div class="row"><label>${n}</label><input inputmode="decimal" value="${T[k]}" oninput="data.targets.${k}=num(this.value)??0;queueSave()"></div>`).join("")}<p class="hint" style="margin-top:10px">Set protein with your care team; the defaults are placeholders.</p></div>
     <div class="card"><h2>Lifts to track</h2><p class="hint" style="margin-bottom:8px">One line each. These become the rows on strength days.</p><textarea oninput="data.lifts=this.value.split('\\n').map(s=>s.trim()).filter(Boolean);queueSave()">${esc(data.lifts.join("\n"))}</textarea></div>
     <div class="card"><h2>Cardio benchmark</h2><p class="hint" style="margin-bottom:8px">Name it so you know what you're measuring, e.g. "3 mi loop (min)" or "pace at 140 bpm".</p><input style="width:100%;text-align:left" value="${esc(data.cardioName)}" oninput="data.cardioName=this.value;queueSave()"></div>
     <div class="card"><h2>Backup &amp; restore</h2><p class="hint" style="margin-bottom:8px">Copy this text somewhere safe (Notes works). To restore or move to another device, paste it back and tap Restore.</p>
